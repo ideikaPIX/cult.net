@@ -5,6 +5,7 @@ use crate::shared::{ClientMessage, ServerResponse};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+#[derive(Clone)]
 pub struct NetworkClient {
     pub sender: mpsc::UnboundedSender<ClientMessage>,
     pub receiver: Arc<Mutex<mpsc::UnboundedReceiver<ServerResponse>>>,

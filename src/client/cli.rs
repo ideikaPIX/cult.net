@@ -105,10 +105,21 @@ async fn run_app(
     let mut unread_counts: HashMap<String, usize> = HashMap::new();
     let mut peer_statuses: HashMap<String, (bool, Option<String>)> = HashMap::new();
 
-    let (connect_tx, mut connect_rx) = mpsc::unbounded_channel::<(Option<network::NetworkClient>, String)>();
+    let (connect_tx, mut connect_rx) = mpsc::unbounded_channel::<(Option<network::NetworkClient>, String, Option<&'static str>)>();
+    let (key_tx, mut key_rx) = mpsc::unbounded_channel::<storage::Account>();
+
+    let spinner_frames = vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let mut current_frame = 0;
+    let mut is_connecting = false;
+    let mut is_generating_keys = false;
 
     loop {
-        if let Ok((client_opt, connected_ip)) = connect_rx.try_recv() {
+        if is_connecting || is_generating_keys {
+            current_frame = (current_frame + 1) % spinner_frames.len();
+        }
+
+        if let Ok((client_opt, connected_ip, err_msg)) = connect_rx.try_recv() {
+            is_connecting = false;
             if let Some(actual_client) = client_opt {
                 receiver = Some(actual_client.receiver.clone());
                 net_client = Some(actual_client);
@@ -116,8 +127,22 @@ async fn run_app(
                 accounts = storage::load_accounts().unwrap_or_default().accounts;
                 mode = AppMode::Auth;
             } else {
-                connection_error = "❌ Connection failed. Retrying...".to_string();
+                connection_error = format!("❌ {}", err_msg.unwrap_or("Connection failed"));
             }
+        }
+
+        if let Ok(acc) = key_rx.try_recv() {
+            is_generating_keys = false;
+            if let Some(c) = net_client.as_mut() {
+                let msg = ClientMessage::Register {
+                    username: acc.username.clone(),
+                    public_key: acc.public_key.clone(),
+                };
+                let _ = c.sender.send(msg);
+            }
+            account = Some(acc);
+            input_buffer.clear();
+            mode = AppMode::ShowKey;
         }
 
         if mode == AppMode::Chat && last_poll.elapsed() >= poll_interval {
@@ -210,9 +235,13 @@ async fn run_app(
             &mut delete_account_state,
             &unread_counts,
             &peer_statuses,
+            is_connecting,
+            is_generating_keys,
+            current_frame,
+            &spinner_frames,
         ))?;
 
-        if event::poll(Duration::from_millis(100))? {
+        if crossterm::event::poll(Duration::from_millis(60))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind != event::KeyEventKind::Press {
                     continue;
@@ -274,14 +303,15 @@ async fn run_app(
                                 let ip_clone = ip.clone();
                                 let tx = connect_tx.clone();
                                 input_buffer.clear();
-                                connection_error = "Connecting...".to_string();
+                                is_connecting = true;
 
                                 tokio::spawn(async move {
                                     let connected_client = match tokio::time::timeout(Duration::from_secs(3), network::connect(&ip_clone)).await {
-                                        Ok(Ok(client)) => Some(client),
-                                        _ => None,
+                                        Ok(Ok(client)) => Ok(client),
+                                        Ok(Err(_)) => Err("Failed to connect"),
+                                        Err(_) => Err("Timeout"),
                                     };
-                                    let _ = tx.send((connected_client, ip_clone));
+                                    let _ = tx.send((connected_client.as_ref().ok().cloned(), ip_clone, connected_client.err()));
                                 });
                             }
                         }
@@ -307,26 +337,28 @@ async fn run_app(
                         KeyCode::Backspace => { input_buffer.pop(); },
                         KeyCode::Enter => {
                             let username = input_buffer.trim().to_string();
-                            let mut is_new = false;
-                            let acc = if username.is_empty() && active_acc.is_some() {
-                                active_acc.clone().unwrap()
+                            if username.is_empty() && active_acc.is_some() {
+                                let acc = active_acc.clone().unwrap();
+                                if let Some(c) = net_client.as_mut() {
+                                    let msg = ClientMessage::Register {
+                                        username: acc.username.clone(),
+                                        public_key: acc.public_key.clone(),
+                                    };
+                                    let _ = c.sender.send(msg);
+                                }
+                                account = Some(acc);
+                                input_buffer.clear();
+                                mode = AppMode::Main;
                             } else {
-                                let actual_username = if username.is_empty() { "anonymous" } else { &username };
-                                is_new = true;
-                                auth::login(actual_username, true).unwrap()
-                            };
-                            
-                            if let Some(c) = net_client.as_mut() {
-                                let msg = ClientMessage::Register {
-                                    username: acc.username.clone(),
-                                    public_key: acc.public_key.clone(),
-                                };
-                                let _ = c.sender.send(msg);
+                                let actual_username = if username.is_empty() { "anonymous".to_string() } else { username };
+                                is_generating_keys = true;
+                                let tx = key_tx.clone();
+                                tokio::task::spawn_blocking(move || {
+                                    if let Ok(acc) = auth::login(&actual_username, true) {
+                                        let _ = tx.send(acc);
+                                    }
+                                });
                             }
-                            
-                            account = Some(acc);
-                            input_buffer.clear();
-                            mode = if is_new { AppMode::ShowKey } else { AppMode::Main };
                         }
                         KeyCode::Esc => return Ok(()),
                         _ => {}
@@ -428,12 +460,12 @@ async fn run_app(
                                         
                                         tokio::spawn(async move {
                                             let connected_client = match tokio::time::timeout(Duration::from_secs(3), network::connect(&ip_clone)).await {
-                                                Ok(Ok(client)) => Some(client),
-                                                _ => None,
+                                                Ok(Ok(client)) => Ok(client),
+                                                Ok(Err(_)) => Err("Failed to connect"),
+                                                Err(_) => Err("Timeout"),
                                             };
-                                            let _ = tx.send((connected_client, ip_clone));
-                                        });
-                                    } else {
+                                            let _ = tx.send((connected_client.as_ref().ok().cloned(), ip_clone, connected_client.err()));
+                                        });                                    } else {
                                         mode = AppMode::Auth;
                                     }
                                 }
@@ -756,12 +788,12 @@ async fn run_app(
                                         
                                         tokio::spawn(async move {
                                             let connected_client = match tokio::time::timeout(Duration::from_secs(3), network::connect(&ip_clone)).await {
-                                                Ok(Ok(client)) => Some(client),
-                                                _ => None,
+                                                Ok(Ok(client)) => Ok(client),
+                                                Ok(Err(_)) => Err("Failed to connect"),
+                                                Err(_) => Err("Timeout"),
                                             };
-                                            let _ = tx.send((connected_client, ip_clone));
-                                        });
-                                    } else {
+                                            let _ = tx.send((connected_client.as_ref().ok().cloned(), ip_clone, connected_client.err()));
+                                        });                                    } else {
                                         mode = AppMode::Auth;
                                     }
                                 }
@@ -799,6 +831,10 @@ fn ui(
     delete_account_state: &mut ListState,
     unread_counts: &HashMap<String, usize>,
     peer_statuses: &HashMap<String, (bool, Option<String>)>,
+    is_connecting: bool,
+    is_generating_keys: bool,
+    current_frame: usize,
+    spinner_frames: &[&str],
 ) {
     f.render_widget(ratatui::widgets::Clear, f.area());
     match mode {
@@ -813,7 +849,9 @@ fn ui(
                 .constraints([Constraint::Length(3), Constraint::Min(0)])
                 .split(f.area());
 
-            let text = if connection_error.is_empty() {
+            let text = if is_connecting {
+                format!("{} Connecting...", spinner_frames[current_frame])
+            } else if connection_error.is_empty() {
                 input_buffer.to_string()
             } else {
                 format!("{}\n{}", input_buffer, connection_error)
@@ -842,7 +880,12 @@ fn ui(
             } else {
                 "Enter username (Right Arrow to switch account)".to_string()
             };
-            let input = Paragraph::new(input_buffer).block(Block::default().title(title).borders(Borders::ALL));
+            let text = if is_generating_keys {
+                format!("{} Generating RSA-4096 cryptographic keypair. Please wait...", spinner_frames[current_frame])
+            } else {
+                input_buffer.to_string()
+            };
+            let input = Paragraph::new(text).block(Block::default().title(title).borders(Borders::ALL));
             f.render_widget(input, chunks[0]);
         }
         AppMode::AuthSwitch => {
