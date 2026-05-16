@@ -1,0 +1,14 @@
+# CULT.NET Configuration Template
+# Copy this file to `config.toml` and adjust the values for your deployment.
+
+[server]
+# The IP address and port the server will bind to.
+# For local testing, use "127.0.0.1:8080".
+# For a VPS behind a reverse proxy (like Nginx), "127.0.0.1:8080" is also recommended.
+# If exposing directly, use "0.0.0.0:8080".
+bind_address = "127.0.0.1:8080"
+
+[client]
+# Default server URL for the client to connect to.
+# e.g., "ws://your_domain.com" or "wss://your_domain.com"
+default_server_url = "ws://127.0.0.1:8080"

@@ -1,0 +1,14 @@
+[Unit]
+Description=CULT.NET Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/fistrada/HRMS/CULT.NET/
+ExecStart=/home/fistrada/HRMS/CULT.NET/target/release/cult-server
+Environment=CULT_SERVER_ADDR=127.0.0.1:8080
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
