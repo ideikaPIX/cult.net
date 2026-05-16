@@ -123,3 +123,26 @@ pub fn get_chat_db(peer_address: &str) -> SqliteResult<Connection> {
     
     Ok(conn)
 }
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct ServerHistory {
+    pub ips: Vec<String>,
+}
+
+pub fn load_server_history() -> Result<ServerHistory, Box<dyn std::error::Error>> {
+    let path = get_cult_dir().join("authinfo").join("servers.json");
+    if !path.exists() {
+        return Ok(ServerHistory::default());
+    }
+    let content = fs::read_to_string(path)?;
+    let data = serde_json::from_str(&content)?;
+    Ok(data)
+}
+
+pub fn save_server_history(data: &ServerHistory) -> Result<(), Box<dyn std::error::Error>> {
+    let path = get_cult_dir().join("authinfo").join("servers.json");
+    let content = serde_json::to_string_pretty(data)?;
+    fs::write(&path, content)?;
+    Ok(())
+}
+
