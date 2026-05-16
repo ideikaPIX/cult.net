@@ -97,6 +97,7 @@ async fn run_app(
 
     let mut active_acc = auth::get_active_account().unwrap_or(None);
     let mut delete_parent_mode: Option<AppMode> = None;
+    let mut current_server_ip: Option<String> = None;
     
     let mut last_poll = Instant::now();
     let poll_interval = Duration::from_secs(5);
@@ -104,13 +105,14 @@ async fn run_app(
     let mut unread_counts: HashMap<String, usize> = HashMap::new();
     let mut peer_statuses: HashMap<String, (bool, Option<String>)> = HashMap::new();
 
-    let (connect_tx, mut connect_rx) = mpsc::unbounded_channel::<Option<network::NetworkClient>>();
+    let (connect_tx, mut connect_rx) = mpsc::unbounded_channel::<(Option<network::NetworkClient>, String)>();
 
     loop {
-        if let Ok(client_opt) = connect_rx.try_recv() {
+        if let Ok((client_opt, connected_ip)) = connect_rx.try_recv() {
             if let Some(actual_client) = client_opt {
                 receiver = Some(actual_client.receiver.clone());
                 net_client = Some(actual_client);
+                current_server_ip = Some(connected_ip);
                 accounts = storage::load_accounts().unwrap_or_default().accounts;
                 mode = AppMode::Auth;
             } else {
@@ -279,7 +281,7 @@ async fn run_app(
                                         Ok(Ok(client)) => Some(client),
                                         _ => None,
                                     };
-                                    let _ = tx.send(connected_client);
+                                    let _ = tx.send((connected_client, ip_clone));
                                 });
                             }
                         }
@@ -405,14 +407,37 @@ async fn run_app(
                         }
                         KeyCode::Enter => {
                             if let Some(i) = switch_acc_state.selected() {
-                                if let Some(selected_acc) = accounts.get(i) {
+                                if let Some(selected_acc) = accounts.get(i).cloned() {
+                                    if let Some(ref mut client) = net_client {
+                                        let _ = client.sender.send(ClientMessage::Disconnect);
+                                        std::thread::sleep(std::time::Duration::from_millis(50));
+                                    }
+
                                     if auth::switch_account(&selected_acc.full_address).unwrap_or(false) {
-                                        active_acc = Some(selected_acc.clone());
+                                        active_acc = Some(selected_acc);
                                         input_buffer.clear();
+                                    }
+
+                                    if let Some(ref ip) = current_server_ip {
+                                        net_client = None;
+                                        receiver = None;
+                                        
+                                        let ip_clone = ip.clone();
+                                        let tx = connect_tx.clone();
+                                        connection_error = "Switching session...".to_string();
+                                        
+                                        tokio::spawn(async move {
+                                            let connected_client = match tokio::time::timeout(Duration::from_secs(3), network::connect(&ip_clone)).await {
+                                                Ok(Ok(client)) => Some(client),
+                                                _ => None,
+                                            };
+                                            let _ = tx.send((connected_client, ip_clone));
+                                        });
+                                    } else {
+                                        mode = AppMode::Auth;
                                     }
                                 }
                             }
-                            mode = AppMode::Auth;
                         }
                         _ => {}
                     },
@@ -710,13 +735,37 @@ async fn run_app(
                         }
                         KeyCode::Enter => {
                             if let Some(idx) = switch_acc_state.selected() {
-                                if let Some(selected_acc) = accounts.get(idx) {
+                                if let Some(selected_acc) = accounts.get(idx).cloned() {
+                                    if let Some(ref mut client) = net_client {
+                                        let _ = client.sender.send(ClientMessage::Disconnect);
+                                        std::thread::sleep(std::time::Duration::from_millis(50));
+                                    }
+
                                     if auth::switch_account(&selected_acc.full_address).unwrap_or(false) {
-                                        account = Some(selected_acc.clone());
+                                        active_acc = Some(selected_acc);
+                                        input_buffer.clear();
+                                    }
+
+                                    if let Some(ref ip) = current_server_ip {
+                                        net_client = None;
+                                        receiver = None;
+                                        
+                                        let ip_clone = ip.clone();
+                                        let tx = connect_tx.clone();
+                                        connection_error = "Switching session...".to_string();
+                                        
+                                        tokio::spawn(async move {
+                                            let connected_client = match tokio::time::timeout(Duration::from_secs(3), network::connect(&ip_clone)).await {
+                                                Ok(Ok(client)) => Some(client),
+                                                _ => None,
+                                            };
+                                            let _ = tx.send((connected_client, ip_clone));
+                                        });
+                                    } else {
+                                        mode = AppMode::Auth;
                                     }
                                 }
                             }
-                            mode = AppMode::Main;
                         }
                         _ => {}
                     }

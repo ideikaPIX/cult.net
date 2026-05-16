@@ -16,6 +16,8 @@ pub enum ClientMessage {
     },
     #[serde(rename = "check_status")]
     CheckStatus { target: String },
+    #[serde(rename = "disconnect")]
+    Disconnect,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

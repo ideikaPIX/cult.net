@@ -150,6 +150,12 @@ async fn handle_connection(stream: TcpStream, registry: SharedRegistry, queue: S
                                 println!("Target {} offline, message enqueued", to);
                             }
                         }
+                    },
+                    ClientMessage::Disconnect => {
+                        if let Some(ref current_user) = current_user_address {
+                            println!("Пользователь {} запросил отключение", current_user);
+                        }
+                        break;
                     }
                 }
             }
@@ -158,8 +164,9 @@ async fn handle_connection(stream: TcpStream, registry: SharedRegistry, queue: S
 
     send_task.abort();
     
-    // Cleanup on disconnect
+    // КРИТИЧЕСКИЙ ФИКС: Очистка реестра после выхода из цикла (по Disconnect или по обрыву связи)
     if let Some(address) = current_user_address {
+        println!("Удаляем {} из глобального реестра онлайна", address);
         registry::set_online_status(&registry, &address, false).await;
         clients_clone.write().await.remove(&address);
     }
