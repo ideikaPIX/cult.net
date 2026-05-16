@@ -14,6 +14,8 @@ pub enum ClientMessage {
         encrypted_content: String,
         timestamp: String,
     },
+    #[serde(rename = "check_status")]
+    CheckStatus { target: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -29,6 +31,12 @@ pub enum ServerResponse {
     IncomingMessage {
         from: String,
         encrypted_content: String,
+    },
+    #[serde(rename = "status_response")]
+    StatusResponse {
+        target: String,
+        online: bool,
+        last_seen: Option<String>,
     },
     #[serde(rename = "error")]
     Error { message: String },

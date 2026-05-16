@@ -64,6 +64,9 @@ async fn run_app(
     let mut delete_idx: usize = 0;
     let mut delete_confirm: bool = false;
     let mut last_mode = mode;
+    let mut scroll_offset: u16 = 0;
+    let mut is_autoscroll: bool = true;
+    let mut peer_status: Option<(bool, Option<String>)> = None;
 
     let mut net_client: Option<network::NetworkClient> = None;
     let mut account: Option<storage::Account> = None;
@@ -87,6 +90,7 @@ async fn run_app(
                                 // If we are in chat with this person, update history
                                 if active_peer == from {
                                     message_history.push((from.clone(), dec_content.clone()));
+                                    is_autoscroll = true;
                                 }
                                 
                                 // Always save to DB
@@ -108,6 +112,11 @@ async fn run_app(
                                     c.public_key = public_key.clone();
                                     let _ = storage::save_contacts(&data);
                                 }
+                            }
+                        },
+                        ServerResponse::StatusResponse { target, online, last_seen } => {
+                            if target == active_peer {
+                                peer_status = Some((online, last_seen));
                             }
                         },
                         _ => {}
@@ -134,7 +143,10 @@ async fn run_app(
             delete_idx,
             delete_confirm,
             &connection_error,
-            active_acc.as_ref().map(|a| a.full_address.clone())
+            active_acc.as_ref().map(|a| a.full_address.clone()),
+            &mut scroll_offset,
+            &mut is_autoscroll,
+            &peer_status
         ))?;
 
         if event::poll(Duration::from_millis(100))? {
@@ -234,6 +246,12 @@ async fn run_app(
                                     }
                                 }
                                 
+                                // Always fetch status
+                                if let Some(client) = net_client.as_mut() {
+                                    let _ = client.sender.send(ClientMessage::CheckStatus { target: active_peer.clone() });
+                                }
+                                peer_status = None;
+                                
                                 // Load history
                                 message_history.clear();
                                 if let Ok(conn) = storage::get_chat_db(&active_peer) {
@@ -256,6 +274,18 @@ async fn run_app(
                     },
                     AppMode::Chat => match key.code {
                         KeyCode::Esc => mode = AppMode::Peers,
+                        KeyCode::Up | KeyCode::PageUp => {
+                            if scroll_offset > 0 {
+                                scroll_offset = scroll_offset.saturating_sub(1);
+                            }
+                            is_autoscroll = false;
+                        }
+                        KeyCode::Down | KeyCode::PageDown => {
+                            scroll_offset = scroll_offset.saturating_add(1);
+                            // It will be clamped to max scroll in `ui` rendering, 
+                            // we'll update is_autoscroll inside `ui` if we reach bottom,
+                            // or we can just leave it to `ui` to handle clamp and autoscroll flags.
+                        }
                         KeyCode::Char(c) => {
                             input_buffer.push(c);
                         }
@@ -265,6 +295,7 @@ async fn run_app(
                         KeyCode::Enter => {
                             let text = input_buffer.trim().to_string();
                             if !text.is_empty() {
+                                is_autoscroll = true;
                                 let peer_pub_key = contacts.iter()
                                     .find(|c| c.full_address == active_peer)
                                     .map(|c| c.public_key.clone())
@@ -423,6 +454,9 @@ fn ui(
     delete_confirm: bool,
     connection_error: &str,
     active_acc_address: Option<String>,
+    scroll_offset: &mut u16,
+    is_autoscroll: &mut bool,
+    peer_status: &Option<(bool, Option<String>)>,
 ) {
     f.render_widget(ratatui::widgets::Clear, f.area());
     match mode {
@@ -513,7 +547,64 @@ fn ui(
                     lines.push(Line::from(format!("{}: {}", display_sender, text)));
                 }
 
-                let messages = Paragraph::new(lines).block(Block::default().title(format!("Chat with: {}", active_peer)).borders(Borders::ALL));
+                let total_lines = lines.len() as u16;
+                let visible_height = chunks[0].height.saturating_sub(2);
+
+                if total_lines > visible_height {
+                    let max_scroll = total_lines - visible_height;
+                    if *is_autoscroll {
+                        *scroll_offset = max_scroll;
+                    } else if *scroll_offset > max_scroll {
+                        *scroll_offset = max_scroll;
+                    }
+                    if *scroll_offset == max_scroll {
+                        *is_autoscroll = true;
+                    }
+                } else {
+                    *scroll_offset = 0;
+                    *is_autoscroll = true;
+                }
+
+                let scroll_indicator = if total_lines > visible_height && !*is_autoscroll {
+                    " [Auto-scroll OFF]"
+                } else {
+                    ""
+                };
+
+                use ratatui::text::Span;
+                use ratatui::style::{Style, Color};
+
+                let status_span = match peer_status {
+                    Some((true, _)) => Span::styled(" [Online]", Style::default().fg(Color::Green)),
+                    Some((false, Some(last_seen))) => {
+                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(last_seen) {
+                            let now = chrono::Utc::now();
+                            let diff = now.signed_duration_since(dt.with_timezone(&chrono::Utc));
+                            let text = if diff.num_minutes() < 60 {
+                                format!(" [Last seen: {}m ago]", diff.num_minutes())
+                            } else if diff.num_hours() < 24 {
+                                format!(" [Last seen: {}h ago]", diff.num_hours())
+                            } else {
+                                format!(" [Last seen: {}d ago]", diff.num_days())
+                            };
+                            Span::styled(text, Style::default().fg(Color::DarkGray))
+                        } else {
+                            Span::styled(" [Offline]", Style::default().fg(Color::DarkGray))
+                        }
+                    },
+                    Some((false, None)) => Span::styled(" [Offline]", Style::default().fg(Color::DarkGray)),
+                    None => Span::raw(""),
+                };
+
+                let title_line = Line::from(vec![
+                    Span::raw(format!("Chat with: {}", active_peer)),
+                    status_span,
+                    Span::raw(scroll_indicator),
+                ]);
+
+                let messages = Paragraph::new(lines)
+                    .block(Block::default().title(title_line).borders(Borders::ALL))
+                    .scroll((*scroll_offset, 0));
                 f.render_widget(messages, chunks[0]);
 
                 let input = Paragraph::new(input_buffer).block(Block::default().title("Type message (Enter to send, Esc to back)").borders(Borders::ALL));

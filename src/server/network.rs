@@ -93,6 +93,9 @@ async fn handle_connection(stream: TcpStream, registry: SharedRegistry, queue: S
                         }
                     },
                     ClientMessage::GetPublicKey { target } => {
+                        if let Some(from) = current_user_address.as_ref() {
+                            registry::add_trust(&registry, from, &target).await;
+                        }
                         if let Some((pub_key, is_online)) = registry::get_public_key(&registry, &target).await {
                             let resp = ServerResponse::KeyResponse {
                                 public_key: pub_key,
@@ -101,6 +104,21 @@ async fn handle_connection(stream: TcpStream, registry: SharedRegistry, queue: S
                             let _ = tx.send(Message::Text(serde_json::to_string(&resp).unwrap().into()));
                         } else {
                             let resp = ServerResponse::Error { message: "Not found".to_string() };
+                            let _ = tx.send(Message::Text(serde_json::to_string(&resp).unwrap().into()));
+                        }
+                    },
+                    ClientMessage::CheckStatus { target } => {
+                        if let Some(from) = current_user_address.as_ref() {
+                            let (online, last_seen) = if let Some((is_online, ls)) = registry::get_status(&registry, &target, from).await {
+                                (is_online, ls)
+                            } else {
+                                (false, None)
+                            };
+                            let resp = ServerResponse::StatusResponse {
+                                target,
+                                online,
+                                last_seen,
+                            };
                             let _ = tx.send(Message::Text(serde_json::to_string(&resp).unwrap().into()));
                         }
                     },
