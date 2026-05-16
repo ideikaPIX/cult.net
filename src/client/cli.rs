@@ -104,7 +104,20 @@ async fn run_app(
     let mut unread_counts: HashMap<String, usize> = HashMap::new();
     let mut peer_statuses: HashMap<String, (bool, Option<String>)> = HashMap::new();
 
+    let (connect_tx, mut connect_rx) = mpsc::unbounded_channel::<Option<network::NetworkClient>>();
+
     loop {
+        if let Ok(client_opt) = connect_rx.try_recv() {
+            if let Some(actual_client) = client_opt {
+                receiver = Some(actual_client.receiver.clone());
+                net_client = Some(actual_client);
+                accounts = storage::load_accounts().unwrap_or_default().accounts;
+                mode = AppMode::Auth;
+            } else {
+                connection_error = "❌ Connection failed. Retrying...".to_string();
+            }
+        }
+
         if mode == AppMode::Chat && last_poll.elapsed() >= poll_interval {
             if let Some(client) = net_client.as_mut() {
                 let _ = client.sender.send(ClientMessage::CheckStatus { target: active_peer.clone() });
@@ -199,6 +212,17 @@ async fn run_app(
 
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
+                if key.kind != event::KeyEventKind::Press {
+                    continue;
+                }
+                
+                // Ensure default selection for lists
+                if mode == AppMode::EnterServerIp && server_history_state.selected().is_none() && !server_history.is_empty() {
+                    server_history_state.select(Some(0));
+                } else if mode == AppMode::Peers && peers_state.selected().is_none() && !contacts.is_empty() {
+                    peers_state.select(Some(0));
+                }
+
                 if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
                     return Ok(());
                 }
@@ -245,17 +269,18 @@ async fn run_app(
                                 }
 
                                 connection_error.clear();
-                                match tokio::time::timeout(Duration::from_secs(3), network::connect(&ip)).await {
-                                    Ok(Ok(client)) => {
-                                        receiver = Some(client.receiver.clone());
-                                        net_client = Some(client);
-                                        input_buffer.clear();
-                                        mode = AppMode::Auth;
-                                    }
-                                    _ => {
-                                        connection_error = "❌ Connection failed. Retrying...".to_string();
-                                    }
-                                }
+                                let ip_clone = ip.clone();
+                                let tx = connect_tx.clone();
+                                input_buffer.clear();
+                                connection_error = "Connecting...".to_string();
+
+                                tokio::spawn(async move {
+                                    let connected_client = match tokio::time::timeout(Duration::from_secs(3), network::connect(&ip_clone)).await {
+                                        Ok(Ok(client)) => Some(client),
+                                        _ => None,
+                                    };
+                                    let _ = tx.send(connected_client);
+                                });
                             }
                         }
                         KeyCode::Esc => return Ok(()),
@@ -729,6 +754,10 @@ fn ui(
     f.render_widget(ratatui::widgets::Clear, f.area());
     match mode {
         AppMode::EnterServerIp => {
+            if server_history_state.selected().is_none() && !server_history.is_empty() {
+                server_history_state.select(Some(0));
+            }
+
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .margin(2)
@@ -838,6 +867,10 @@ fn ui(
             }
         }
         AppMode::Peers => {
+            if peers_state.selected().is_none() && !contacts.is_empty() {
+                peers_state.select(Some(0));
+            }
+
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .margin(2)
