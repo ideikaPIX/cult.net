@@ -18,6 +18,7 @@ rsa = "0.9"
 rusqlite = { version = "0.32", features = ["bundled"] }
 crossterm = "0.28"
 dirs = "5.0"
+aes-gcm = "0.10"
 
 # Server specific
 uuid = { version = "1", features = ["v4", "serde"] }

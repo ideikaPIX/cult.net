@@ -1,6 +1,13 @@
 use rsa::{RsaPrivateKey, RsaPublicKey, pkcs1::DecodeRsaPrivateKey, pkcs1::DecodeRsaPublicKey, pkcs1::EncodeRsaPrivateKey, pkcs1::EncodeRsaPublicKey, Pkcs1v15Encrypt};
 use rand::rngs::OsRng;
 use std::error::Error;
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum InnerPayload {
+    KeyInit { encrypted_aes_key: Vec<u8> },
+    SecureText { ciphertext: Vec<u8>, nonce: Vec<u8> },
+}
 
 pub struct KeyPair {
     pub private_key_pem: String,
@@ -36,4 +43,31 @@ pub fn decrypt(ciphertext_base64: &str, private_key_pem: &str) -> Result<String,
     let enc_data = general_purpose::STANDARD.decode(ciphertext_base64)?;
     let dec_data = priv_key.decrypt(Pkcs1v15Encrypt, &enc_data)?;
     Ok(String::from_utf8(dec_data)?)
+}
+
+pub fn aes_encrypt(text: &str, key: &[u8; 32]) -> Result<(Vec<u8>, Vec<u8>), Box<dyn Error>> {
+    use aes_gcm::{Aes256Gcm, Key, Nonce, aead::{Aead, KeyInit}};
+    use rand::RngCore;
+
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let mut nonce_bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher.encrypt(nonce, text.as_bytes())
+        .map_err(|e| format!("AES Encryption error: {:?}", e))?;
+    
+    Ok((ciphertext, nonce_bytes.to_vec()))
+}
+
+pub fn aes_decrypt(ciphertext: &[u8], key: &[u8; 32], nonce: &[u8]) -> Result<String, Box<dyn Error>> {
+    use aes_gcm::{Aes256Gcm, Key, Nonce, aead::{Aead, KeyInit}};
+
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce_obj = Nonce::from_slice(nonce);
+
+    let plaintext = cipher.decrypt(nonce_obj, ciphertext)
+        .map_err(|e| format!("AES Decryption error: {:?}", e))?;
+
+    Ok(String::from_utf8(plaintext)?)
 }
