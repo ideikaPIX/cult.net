@@ -167,6 +167,7 @@ async fn run_app(
                                 if let Ok(payload) = serde_json::from_str::<crate::client::crypto::InnerPayload>(&encrypted_content) {
                                     match payload {
                                         crate::client::crypto::InnerPayload::KeyInit { encrypted_aes_key } => {
+                                            eprintln!("[DEBUG] Received KeyInit from {} for session establishment", from);
                                             if let Ok(enc_str) = String::from_utf8(encrypted_aes_key) {
                                                 if let Ok(dec_b64) = crate::client::crypto::decrypt(&enc_str, &acc.private_key) {
                                                     use base64::{Engine as _, engine::general_purpose};
@@ -207,6 +208,7 @@ async fn run_app(
                             }
                         },
                         ServerResponse::KeyResponse { public_key, online_status: _ } => {
+                            eprintln!("[DEBUG] Received public key for {}", active_peer);
                             if let Some(contact) = contacts.iter_mut().find(|c| c.full_address == active_peer) {
                                 contact.public_key = public_key.clone();
                                 let mut data = storage::load_contacts().unwrap_or_default();
@@ -215,12 +217,45 @@ async fn run_app(
                                     let _ = storage::save_contacts(&data);
                                 }
                             }
+
+                            if !public_key.is_empty() && !ephemeral_aes_keys.contains_key(&active_peer) {
+                                use rand::Rng;
+                                use base64::{Engine as _, engine::general_purpose};
+                                
+                                let mut new_key = [0u8; 32];
+                                rand::thread_rng().fill(&mut new_key);
+
+                                let new_key_b64 = general_purpose::STANDARD.encode(new_key);
+                                if let Ok(encrypted_aes_str) = crate::client::crypto::encrypt(&new_key_b64, &public_key) {
+                                    let payload = crate::client::crypto::InnerPayload::KeyInit { 
+                                        encrypted_aes_key: encrypted_aes_str.into_bytes() 
+                                    };
+                                    if let Ok(json_str) = serde_json::to_string(&payload) {
+                                        if let Some(client) = net_client.as_mut() {
+                                            if let Some(acc) = account.as_ref() {
+                                                eprintln!("[DEBUG] Sending KeyInit to establishment secure channel with {}", active_peer);
+                                                let msg = ClientMessage::SendMessage {
+                                                    from: acc.full_address.clone(),
+                                                    to: active_peer.clone(),
+                                                    encrypted_content: json_str,
+                                                    timestamp: chrono::Utc::now().to_rfc3339(),
+                                                };
+                                                let _ = client.sender.send(msg);
+                                            }
+                                        }
+                                        ephemeral_aes_keys.insert(active_peer.clone(), new_key);
+                                    }
+                                }
+                            }
                         },
                         ServerResponse::StatusResponse { target, online, last_seen } => {
                             if target == active_peer {
                                 peer_status = Some((online, last_seen.clone()));
                             }
                             peer_statuses.insert(target, (online, last_seen));
+                        },
+                        ServerResponse::Error { message } => {
+                            eprintln!("[DEBUG] Server error: {}", message);
                         },
                         _ => {}
                     }
@@ -563,10 +598,9 @@ async fn run_app(
                                     active_peer = contact.full_address.clone();
                                     unread_counts.insert(active_peer.clone(), 0);
                                     
-                                    if contact.public_key.is_empty() {
-                                        if let Some(client) = net_client.as_mut() {
-                                            let _ = client.sender.send(ClientMessage::GetPublicKey { target: active_peer.clone() });
-                                        }
+                                    if let Some(client) = net_client.as_mut() {
+                                        eprintln!("[DEBUG] Requesting public key for {}", active_peer);
+                                        let _ = client.sender.send(ClientMessage::GetPublicKey { target: active_peer.clone() });
                                     }
                                     
                                     if let Some(client) = net_client.as_mut() {
@@ -1026,7 +1060,7 @@ fn ui(
                 "[Esc] [q]"
             } else {
                 match mode {
-                    AppMode::Peers => "[↵] [d][s][Esc][↑/↓]",
+                    AppMode::Peers => "[↵] [a][d][s][Esc][↑/↓]",
                     AppMode::Chat => " [Esc] ",
                     _ => "[p][s][q]",
                 }

@@ -37,7 +37,13 @@ pub async fn start_server(addr: &str, registry: SharedRegistry, queue: SharedQue
 
 async fn handle_connection(stream: TcpStream, registry: SharedRegistry, queue: SharedQueue, clients: SharedClients) {
     let peer_addr = stream.peer_addr().ok();
-    let ws_stream = accept_async(stream).await.expect("Error during the websocket handshake occurred");
+    let ws_stream = match accept_async(stream).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error during the websocket handshake for {:?}: {}", peer_addr, e);
+            return;
+        }
+    };
     println!("New client connected: {:?}", peer_addr);
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
     
@@ -61,13 +67,17 @@ async fn handle_connection(stream: TcpStream, registry: SharedRegistry, queue: S
         };
 
         if msg.is_text() {
-            let text = msg.to_text().unwrap();
+            let text = match msg.to_text() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
             println!("Raw message received: {}", text); // Log raw message
             if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(text) {
                 match client_msg {
                     ClientMessage::Register { username, public_key } => {
                         let peer_id = auth::generate_peer_id(&public_key);
                         let full_address = format!("{}#{}@cult.net", username, peer_id);
+                        println!("[DEBUG] User registered as: {}", full_address);
                         
                         registry::register_user(&registry, full_address.clone(), public_key).await;
                         
@@ -103,6 +113,7 @@ async fn handle_connection(stream: TcpStream, registry: SharedRegistry, queue: S
                             };
                             let _ = tx.send(Message::Text(serde_json::to_string(&resp).unwrap().into()));
                         } else {
+                            println!("[DEBUG] Public key for {} not found in registry", target);
                             let resp = ServerResponse::Error { message: "Not found".to_string() };
                             let _ = tx.send(Message::Text(serde_json::to_string(&resp).unwrap().into()));
                         }
@@ -125,10 +136,11 @@ async fn handle_connection(stream: TcpStream, registry: SharedRegistry, queue: S
                     ClientMessage::SendMessage { from, to, encrypted_content, timestamp } => {
                         // Very basic auth check: ensure 'from' matches current_user_address
                         if current_user_address.as_ref() == Some(&from) {
-                            println!("Forwarding message from {} to {}", from, to);
+                            println!("[DEBUG] Forwarding message from {} to {}", from, to);
                             let clients_read = clients.read().await;
                             if let Some(target_tx) = clients_read.get(&to) {
                                 // Target is online
+                                println!("[DEBUG] Target {} is ONLINE. Sending...", to);
                                 let msg_resp = ServerResponse::IncomingMessage {
                                     from: from.clone(),
                                     encrypted_content,
@@ -141,6 +153,7 @@ async fn handle_connection(stream: TcpStream, registry: SharedRegistry, queue: S
                                 let _ = tx.send(Message::Text(serde_json::to_string(&resp).unwrap().into()));
                             } else {
                                 // Target is offline, enqueue
+                                println!("[DEBUG] Target {} is OFFLINE. Enqueueing...", to);
                                 let qm = queue::QueuedMessage {
                                     from: from.clone(),
                                     encrypted_content,
@@ -148,8 +161,9 @@ async fn handle_connection(stream: TcpStream, registry: SharedRegistry, queue: S
                                     expires_at: Utc::now() + Duration::hours(24),
                                 };
                                 queue::enqueue_message(&queue, to.clone(), qm).await;
-                                println!("Target {} offline, message enqueued", to);
                             }
+                        } else {
+                            println!("[DEBUG] Message AUTH FAILED. Expected from: {:?}, Got: {}", current_user_address, from);
                         }
                     },
                     ClientMessage::Disconnect => {
