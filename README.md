@@ -6,37 +6,50 @@
 
 ## Architecture Overview
 
-### 1. Hybrid Cryptography Core
+### Hybrid Cryptography Core
 To ensure maximum performance without compromising security, CULT.NET uses a dual-layer hybrid encryption pipeline:
 * **Asymmetric Layer (RSA-2048):** Used for initial key exchange and identity verification between peers.
 * **Symmetric Layer (AES-256-GCM):** Once a secure session is initiated, messages are packed with a unique `nonce` and encrypted via hardware-accelerated AES.
 * **Fallback Protocol:** If an incoming payload fails to decrypt via AES (e.g., due to session desynchronization), the client automatically triggers an RSA decryption fallback to process identity payloads without dropping the connection.
 
-### 2. Network Gateway & Persistence
+### Network Gateway & Persistence
 * **Resilient Connection Handling:** The client utilizes a 3-attempt connection loop before prompting a fallback state.
-* **Smart Offline Mode:** If the server is unreachable, users can drop directly into local-only mode (`[↵] Offline mode`) to browse historical logs.
 * **Asynchronous Background Pinger:** An active background scanner pings configured peers every 20 seconds even before entering the active peer view (`AppMode::Peers`), ensuring live status metrics immediately upon UI initialization.
 * **Local Storage:** Message history and credential indexing are securely maintained via a local SQLite database infrastructure.
-
-### 3. Streamlined TUI Design
-* **Dual-Pane Interface:** Fixed 28-column sidebar for stateful contact navigation, alongside a dynamic chat grid.
-* **Dynamic Hint Line:** The bottom navigation bar mutates in real-time, showing *only* context-relevant shortcuts to save valuable screen space.
-* **Truncation & Overlay:** Long peer handles are automatically clipped (`..`). When highlighted, the viewport bypasses layout boundaries to render the address as a layout overlay.
-* **Interactive Scroll:** Incorporates a high-contrast yellow triple-arrow indicator (`▲▲▲`) in the lower-left corner of the message pad when viewing older historical segments.
 
 ---
 
 ## Project Structure
 ```
-├── Cargo.toml
-├── src
-│   ├── main.rs          # Application entry point
-│   ├── server           # Server architecture & packet routing
-│   │   └── mod.rs
-│   └── client           # Client logic and UI rendering
-│       ├── mod.rs
-│       ├── cli.rs       # Ratatui TUI Layout engine & dynamic views
-│       └── network.rs   # Async networking & crypto primitives
+cult.net/
+ ├── .gitignore               # Configured ignore list (filters out DBs, keys, logs, and build artifacts)
+ ├── Cargo.toml               # Project manifest with dependencies (tokio, ratatui, ring, aes-gcm, rusqlite)
+ ├── Cargo.lock               # Locked versions of all Rust crates
+ ├── README.md                # Minimalist project description and deployment/startup guidelines
+ ├── CULT.md                  # Internal project documentation and development roadmap
+ ├── config.toml.example      # Configuration template file
+ ├── cult-server.service      # Systemd unit file to deploy the server as a background daemon on Linux
+ ├── nginx.conf               # Nginx configuration template
+ │
+ └── src/                     # Rust source code
+      ├── main.rs             # Default application entry point
+      ├── shared.rs           # Shared data structures for client and server (e.g., ClientMessage / ServerResponse enums)
+      │
+      ├── client/             # 🖥️ CLIENT SIDE
+      │    ├── mod.rs         # Client module aggregator
+      │    ├── cli.rs         # UI Core: Ratatui rendering, key event handling, state machine (AppMode)
+      │    ├── auth.rs        # Auth logic, RSA key pair generation, active account management
+      │    ├── crypto.rs      # Hybrid crypto core (RSA key encapsulation + AES-256-GCM text encryption)
+      │    ├── network.rs     # Async TCP/WS client (connection management, socket polling, background pings)
+      │    ├── storage.rs     # Local SQLite storage (message history, peer caching, server address index)
+      │    └── messages.rs    # Message parsing and formatting layout engine
+      │
+      └── server/             # 📡 SERVER SIDE
+           ├── main.rs        # Server entry point binary (cargo run --bin cult-server)
+           ├── network.rs     # TCP/WS server: port binding, incoming connection handling loop
+           ├── auth.rs        # Registration validation (PublicKey + Username identity mapping)
+           ├── registry.rs    # In-memory connected peers registry (live socket index and online states)
+           └── queue.rs       # Offline message queue store (store-and-forward edge cache for offline peers)
 ```
 Compilation and Local Setup
 Prerequisites
@@ -44,14 +57,14 @@ Prerequisites
 Ensure you have the Rust toolchain installed (Rustc 1.75+ recommended):
 Bash
 ```
-curl --proto '=https' --tlsv1.2 -sSf [https://sh.rustup.rs](https://sh.rustup.rs) | sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 Building the Project
 
 Clone the repository and build the production-ready optimized binaries:
 Bash
 ```
-git clone [https://github.com/ideikaPIX/cult-net.git](https://github.com/ideikaPIX/cult-net.git)
+git clone https://github.com/ideikaPIX/cult-net.git
 ```
 ```
 cd cult-net
