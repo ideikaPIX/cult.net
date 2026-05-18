@@ -162,7 +162,7 @@ async fn run_app(
             if let Ok(mut lock) = r.try_lock() {
                 while let Ok(resp) = lock.try_recv() {
                     match resp {
-                        ServerResponse::IncomingMessage { from, encrypted_content } => {
+                        ServerResponse::IncomingMessage { from, encrypted_content, timestamp } => {
                             if let Some(acc) = account.as_ref() {
                                 if let Ok(payload) = serde_json::from_str::<crate::client::crypto::InnerPayload>(&encrypted_content) {
                                     match payload {
@@ -196,10 +196,9 @@ async fn run_app(
                                             }
                                             
                                             if let Ok(conn) = storage::get_chat_db(&from) {
-                                                let ts = chrono::Utc::now().to_rfc3339();
                                                 let _ = conn.execute(
                                                     "INSERT INTO messages (timestamp, sender, content, status, is_yours) VALUES (?1, ?2, ?3, ?4, ?5)",
-                                                    (ts, from.clone(), dec_content, "received", false),
+                                                    (timestamp, from.clone(), dec_content, "received", false),
                                                 );
                                             }
                                         }
@@ -1027,9 +1026,9 @@ fn ui(
                 "[Esc] [q]"
             } else {
                 match mode {
-                    AppMode::Peers => " [d] [s] [Esc] ",
-                    AppMode::Chat => " [↵] [Esc]",
-                    _ => " [p] [s] [q] ",
+                    AppMode::Peers => "[↵] [d][s][Esc][↑/↓]",
+                    AppMode::Chat => " [Esc] ",
+                    _ => "[p][s][q]",
                 }
             };
 
@@ -1086,8 +1085,8 @@ fn ui(
                 f.render_widget(Paragraph::new(" Select peer [p] ").block(Block::default().borders(Borders::ALL)), main_chunks[1]);
             } else {
                 let peer_short = active_peer.split('@').next().unwrap_or(active_peer);
-                let peer_is_on = match peer_statuses.get(active_peer) {
-                    Some(&(true, _)) => true,
+                let peer_is_on = match peer_status {
+                    Some((true, _)) => true,
                     _ => false,
                 };
                 
@@ -1152,7 +1151,7 @@ fn ui(
                     let input_width = right_chunks[2].width.saturating_sub(2) as usize;
                     let input_scroll = (input_buffer.chars().count()).saturating_sub(input_width) as u16;
                     let input_p = Paragraph::new(input_buffer)
-                        .block(Block::default().title("[↵] [Esc]").borders(Borders::ALL))
+                        .block(Block::default().title("[↵] [↑/↓]").borders(Borders::ALL))
                         .scroll((0, input_scroll));
                     f.render_widget(input_p, right_chunks[2]);
                     

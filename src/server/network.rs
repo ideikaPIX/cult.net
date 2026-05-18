@@ -88,8 +88,8 @@ async fn handle_connection(stream: TcpStream, registry: SharedRegistry, queue: S
                             let msg_resp = ServerResponse::IncomingMessage {
                                 from: pm.from,
                                 encrypted_content: pm.encrypted_content,
-                            };
-                            let _ = tx.send(Message::Text(serde_json::to_string(&msg_resp).unwrap().into()));
+                                timestamp: pm.timestamp,
+                            };                            let _ = tx.send(Message::Text(serde_json::to_string(&msg_resp).unwrap().into()));
                         }
                     },
                     ClientMessage::GetPublicKey { target } => {
@@ -132,6 +132,7 @@ async fn handle_connection(stream: TcpStream, registry: SharedRegistry, queue: S
                                 let msg_resp = ServerResponse::IncomingMessage {
                                     from: from.clone(),
                                     encrypted_content,
+                                    timestamp,
                                 };
                                 let _ = target_tx.send(Message::Text(serde_json::to_string(&msg_resp).unwrap().into()));
                                 

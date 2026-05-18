@@ -33,6 +33,7 @@ pub enum ServerResponse {
     IncomingMessage {
         from: String,
         encrypted_content: String,
+        timestamp: String,
     },
     #[serde(rename = "status_response")]
     StatusResponse {

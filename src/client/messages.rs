@@ -42,10 +42,9 @@ pub async fn handle_incoming(
     let mut rx = receiver.lock().await;
     while let Some(resp) = rx.recv().await {
         match resp {
-            ServerResponse::IncomingMessage { from, encrypted_content } => {
+            ServerResponse::IncomingMessage { from, encrypted_content, timestamp } => {
                 if let Ok(plaintext) = crypto::decrypt(&encrypted_content, &private_key_pem) {
                     if let Ok(conn) = storage::get_chat_db(&from) {
-                        let timestamp = Utc::now().to_rfc3339();
                         let _ = conn.execute(
                             "INSERT INTO messages (timestamp, sender, content, status, is_yours) VALUES (?1, ?2, ?3, ?4, ?5)",
                             (timestamp, &from, &plaintext, "delivered", false),
