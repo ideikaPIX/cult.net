@@ -89,17 +89,18 @@ sudo ufw enable
 
 Step 2: Binary Deployment
 
-    Move the compiled release binary to a global binary directory:
-    Bash
 
-    sudo cp target/release/cult-server /usr/local/bin/cult-server
-    sudo chmod +x /usr/local/bin/cult-server
-
-    Create a dedicated system user to isolate system privileges:
-    Bash
-
-    sudo useradd -m -s /usr/sbin/nologin cult
-
+ Move the compiled release binary to a global binary directory:
+```
+sudo cp target/release/cult-server /usr/local/bin/cult-server
+```
+```
+sudo chmod +x /usr/local/bin/cult-server
+``` 
+ Create a dedicated system user to isolate system privileges:
+```
+sudo useradd -m -s /usr/sbin/nologin cult
+```
 Step 3: Configuring the Systemd Daemon
 
 To ensure the server starts automatically on boot, restarts on crashes, and logs errors properly, configure a systemd service unit.
