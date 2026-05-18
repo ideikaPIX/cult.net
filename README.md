@@ -177,28 +177,12 @@ Bash
 ```
 sudo journalctl -u cult-server.service -f -n 100
 ```
-TUI Quick Shortcut Sheet
-
-Depending on your active mode, the context bar will dynamically shift to show short individual key handles:
-
-    Authentication / Login Screen:
-
-        [← / →] : Switch between local profiles / accounts.
-
-        [↵] : Validate selected cryptographic keys.
-
-    Peers Panel (Sidebar Mode):
-
-        [p] : Toggle peer navigation focus.
-
-        [d] : Remove selected peer identity from SQLite records.
-
-        [s] : Enter global account/auth switcher interface.
-
-        [q] : Gracefully exit terminal application framework.
-
-    Chat Panel (Active Session):
-
-        [↵] : Encrypt input buffer via AES-256-GCM and send packet.
-
-        [Esc] : Lose chat focus and slide back to peer selection panel safely.
+TUI Quick Shortcut Sheet:
+    
+        [← / →  ↑ / ↓] : arrows control 
+        [↵] : Enter
+        [p] : Peers
+        [d] : Delete
+        [s] : Switch (accounts)
+        [q] : quit
+        [Esc] - Escape
