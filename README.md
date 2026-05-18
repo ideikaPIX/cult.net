@@ -1,3 +1,9 @@
+<p align="center">
+  <img src="banner.png" width="100%">
+</p>
+
+---
+
 # CULT.NET
 
 🔐 **CULT.NET** is an ultra-compact, high-security, two-pane terminal messenger written in Rust. It features an end-to-end encrypted hybrid cryptographic core, an asynchronous networking engine with automatic failovers, and a highly optimized monocolor TUI dashboard tailored specifically for narrow viewports, system administrators, and power users (WSL, Termux, Linux consoles).
