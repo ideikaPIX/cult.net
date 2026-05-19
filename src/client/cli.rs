@@ -44,6 +44,7 @@ enum AppMode {
     AddContact,
     DeleteContact,
     ShowKey,
+    TobyFox,
 }
 
 pub async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
@@ -99,6 +100,10 @@ async fn run_app(
     let mut delete_parent_mode: Option<AppMode> = None;
     let mut current_server_ip: Option<String> = None;
     
+    let mut easter_egg_buffer = String::new();
+    let mut easter_egg_start: Option<Instant> = None;
+    let mut last_key_time: Option<Instant> = None;
+    
     let mut last_poll = Instant::now();
     let poll_interval = Duration::from_secs(5);
 
@@ -117,6 +122,16 @@ async fn run_app(
     let mut ephemeral_aes_keys: std::collections::HashMap<String, [u8; 32]> = std::collections::HashMap::new();
 
     loop {
+        if mode == AppMode::TobyFox {
+            if let Some(start) = easter_egg_start {
+                if start.elapsed() >= Duration::from_secs(5) {
+                    mode = AppMode::Peers;
+                    easter_egg_start = None;
+                    easter_egg_buffer.clear();
+                }
+            }
+        }
+
         if is_connecting || is_generating_keys {
             current_frame = (current_frame + 1) % spinner_frames.len();
         }
@@ -543,26 +558,60 @@ async fn run_app(
                         _ => {}
                     },
                     AppMode::Peers => match key.code {
-                        KeyCode::Char('b') | KeyCode::Esc => mode = AppMode::Main,
-                        KeyCode::Char('a') => {
-                            input_buffer.clear();
-                            mode = AppMode::AddContact;
-                        }
-                        KeyCode::Char('d') => {
-                            if !contacts.is_empty() {
-                                delete_contact_state.select(peers_state.selected());
-                                delete_confirm = false;
-                                delete_parent_mode = Some(AppMode::Peers);
-                                mode = AppMode::DeleteContact;
+                        KeyCode::Char(c) => {
+                            // Check timeout
+                            if let Some(last_time) = last_key_time {
+                                if last_time.elapsed() > Duration::from_secs(5) {
+                                    easter_egg_buffer.clear();
+                                }
+                            }
+                            last_key_time = Some(Instant::now());
+
+                            // Update buffer
+                            let sequence = "tobyfox";
+                            let next_buffer = format!("{}{}", easter_egg_buffer, c);
+                            let is_sequence_part = sequence.starts_with(&next_buffer) || sequence.starts_with(&c.to_string());
+                            
+                            if sequence.starts_with(&next_buffer) {
+                                easter_egg_buffer = next_buffer;
+                            } else if sequence.starts_with(&c.to_string()) {
+                                easter_egg_buffer = c.to_string();
+                            } else {
+                                easter_egg_buffer.clear();
+                            }
+
+                            if easter_egg_buffer == sequence {
+                                mode = AppMode::TobyFox;
+                                easter_egg_start = Some(Instant::now());
+                                easter_egg_buffer.clear();
+                                last_key_time = None;
+                            } else if !is_sequence_part {
+                                // Command handling
+                                match c {
+                                    'a' => {
+                                        input_buffer.clear();
+                                        mode = AppMode::AddContact;
+                                    }
+                                    'd' => {
+                                        if !contacts.is_empty() {
+                                            delete_contact_state.select(peers_state.selected());
+                                            delete_confirm = false;
+                                            delete_parent_mode = Some(AppMode::Peers);
+                                            mode = AppMode::DeleteContact;
+                                        }
+                                    }
+                                    's' | 'S' => {
+                                        accounts = storage::load_accounts().unwrap_or_default().accounts;
+                                        if !accounts.is_empty() {
+                                            switch_acc_state.select(Some(0));
+                                        }
+                                        mode = AppMode::Switch;
+                                    }
+                                    _ => {}
+                                }
                             }
                         }
-                        KeyCode::Char('s') | KeyCode::Char('S') => {
-                            accounts = storage::load_accounts().unwrap_or_default().accounts;
-                            if !accounts.is_empty() {
-                                switch_acc_state.select(Some(0));
-                            }
-                            mode = AppMode::Switch;
-                        }
+                        KeyCode::Esc => mode = AppMode::Main,
                         KeyCode::Up => {
                             if !contacts.is_empty() {
                                 let i = match peers_state.selected() {
@@ -905,6 +954,9 @@ async fn run_app(
                             }
                         }
                         _ => {}
+                    },
+                    AppMode::TobyFox => match key.code {
+                        _ => {}
                     }
                 }
             }
@@ -1029,6 +1081,25 @@ fn ui(
                 f.render_widget(Paragraph::new(format!("SAVE THIS!\n\n{}", account.private_key)).block(Block::default().title("RSA PRIV").borders(Borders::ALL).style(Style::default().fg(Color::Red))).wrap(ratatui::widgets::Wrap { trim: true }), chunks[0]);
                 f.render_widget(Paragraph::new("[↵] [Esc]").block(Block::default().borders(Borders::ALL)), chunks[1]);
             }
+        }
+        AppMode::TobyFox => {
+            let dog_art = "█████████████████████████████████████████████████\n█████████████████████████████████████████████████\n█████████████████████████████████████████████████\n█████████████████████████████████████████████████\n██████████  ██        ██  ███████████████████████\n██████████                ███████████████████████\n██████████                  █████████████████████\n████████    ██    ██        █████████████  ██████\n████████                        █████████  ██████\n████████      ████                  █████  ██████\n████████  ██  ██    ██                     ██████\n████████    ████████                       ██████\n████████                                   ██████\n████████                                   ██████\n████████                                   ██████\n████████                                   ██████\n████████                                   ██████\n████████                                  ███████\n██████████                                ███████\n██████████    ████    ████████    ███     ███████\n██████████    ████    ████████    ███     ███████\n█████████████████████████████████████████████████\n█████████████████████████████████████████████████\n█████████████████████████████████████████████████\n█████████████████████████████████████████████████\n█████████████████████████████████████████████████";
+            let area = f.area();
+            let dog_paragraph = Paragraph::new(dog_art)
+                .style(Style::default().fg(Color::Yellow))
+                .alignment(ratatui::layout::Alignment::Center);
+
+            let vertical_margin = area.height.saturating_sub(26) / 2;
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(vertical_margin),
+                    Constraint::Length(26),
+                    Constraint::Min(0),
+                ])
+                .split(area);
+
+            f.render_widget(dog_paragraph, chunks[1]);
         }
         AppMode::Main | AppMode::Peers | AppMode::Chat => {
             let main_chunks = Layout::default()
