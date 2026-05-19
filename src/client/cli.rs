@@ -167,7 +167,6 @@ async fn run_app(
                                 if let Ok(payload) = serde_json::from_str::<crate::client::crypto::InnerPayload>(&encrypted_content) {
                                     match payload {
                                         crate::client::crypto::InnerPayload::KeyInit { encrypted_aes_key } => {
-                                            eprintln!("[DEBUG] Received KeyInit from {} for session establishment", from);
                                             if let Ok(enc_str) = String::from_utf8(encrypted_aes_key) {
                                                 if let Ok(dec_b64) = crate::client::crypto::decrypt(&enc_str, &acc.private_key) {
                                                     use base64::{Engine as _, engine::general_purpose};
@@ -208,7 +207,6 @@ async fn run_app(
                             }
                         },
                         ServerResponse::KeyResponse { public_key, online_status: _ } => {
-                            eprintln!("[DEBUG] Received public key for {}", active_peer);
                             if let Some(contact) = contacts.iter_mut().find(|c| c.full_address == active_peer) {
                                 contact.public_key = public_key.clone();
                                 let mut data = storage::load_contacts().unwrap_or_default();
@@ -233,7 +231,6 @@ async fn run_app(
                                     if let Ok(json_str) = serde_json::to_string(&payload) {
                                         if let Some(client) = net_client.as_mut() {
                                             if let Some(acc) = account.as_ref() {
-                                                eprintln!("[DEBUG] Sending KeyInit to establishment secure channel with {}", active_peer);
                                                 let msg = ClientMessage::SendMessage {
                                                     from: acc.full_address.clone(),
                                                     to: active_peer.clone(),
@@ -254,8 +251,7 @@ async fn run_app(
                             }
                             peer_statuses.insert(target, (online, last_seen));
                         },
-                        ServerResponse::Error { message } => {
-                            eprintln!("[DEBUG] Server error: {}", message);
+                        ServerResponse::Error { message: _ } => {
                         },
                         _ => {}
                     }
@@ -383,13 +379,6 @@ async fn run_app(
                             if !accounts.is_empty() {
                                 switch_acc_state.select(Some(0));
                                 mode = AppMode::AuthSwitch;
-                            }
-                        }
-                        KeyCode::Char('d') | KeyCode::Delete => {
-                            accounts = storage::load_accounts().unwrap_or_default().accounts;
-                            if !accounts.is_empty() {
-                                delete_account_state.select(Some(0));
-                                mode = AppMode::DeleteAccount;
                             }
                         }
                         KeyCode::Char(c) => input_buffer.push(c),
@@ -599,7 +588,6 @@ async fn run_app(
                                     unread_counts.insert(active_peer.clone(), 0);
                                     
                                     if let Some(client) = net_client.as_mut() {
-                                        eprintln!("[DEBUG] Requesting public key for {}", active_peer);
                                         let _ = client.sender.send(ClientMessage::GetPublicKey { target: active_peer.clone() });
                                     }
                                     
