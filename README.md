@@ -182,6 +182,7 @@ TUI Quick Shortcut Sheet:
         [← / →  ↑ / ↓] : arrows control 
         [↵] : Enter
         [p] : Peers
+        [a] : Add
         [d] : Delete
         [s] : Switch (accounts)
         [q] : quit
