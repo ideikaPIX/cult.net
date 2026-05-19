@@ -178,86 +178,77 @@ async fn run_app(
                 while let Ok(resp) = lock.try_recv() {
                     match resp {
                         ServerResponse::IncomingMessage { from, encrypted_content, timestamp } => {
-                            if let Some(acc) = account.as_ref() {
-                                if let Ok(payload) = serde_json::from_str::<crate::client::crypto::InnerPayload>(&encrypted_content) {
-                                    match payload {
-                                        crate::client::crypto::InnerPayload::KeyInit { encrypted_aes_key } => {
-                                            if let Ok(enc_str) = String::from_utf8(encrypted_aes_key) {
-                                                if let Ok(dec_b64) = crate::client::crypto::decrypt(&enc_str, &acc.private_key) {
-                                                    use base64::{Engine as _, engine::general_purpose};
-                                                    if let Ok(key_vec) = general_purpose::STANDARD.decode(dec_b64) {
-                                                        if key_vec.len() == 32 {
-                                                            let mut arr = [0u8; 32];
-                                                            arr.copy_from_slice(&key_vec);
-                                                            ephemeral_aes_keys.insert(from.clone(), arr);
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        crate::client::crypto::InnerPayload::SecureText { ciphertext, nonce } => {
-                                            let dec_content = if let Some(aes_key) = ephemeral_aes_keys.get(&from) {
-                                                crate::client::crypto::aes_decrypt(&ciphertext, aes_key, &nonce)
-                                                    .unwrap_or_else(|_| " [AES Decryption failed]".to_string())
-                                            } else {
-                                                " [Missing AES key]".to_string()
-                                            };
+                            let Some(acc) = account.as_ref() else { continue };
+                            let Ok(payload) = serde_json::from_str::<crate::client::crypto::InnerPayload>(&encrypted_content) else { continue };
+                            
+                            match payload {
+                                crate::client::crypto::InnerPayload::KeyInit { encrypted_aes_key } => {
+                                    let Ok(enc_str) = String::from_utf8(encrypted_aes_key) else { continue };
+                                    let Ok(dec_b64) = crate::client::crypto::decrypt(&enc_str, &acc.private_key) else { continue };
+                                    use base64::{Engine as _, engine::general_purpose};
+                                    let Ok(key_vec) = general_purpose::STANDARD.decode(dec_b64) else { continue };
+                                    
+                                    if key_vec.len() == 32 {
+                                        let mut arr = [0u8; 32];
+                                        arr.copy_from_slice(&key_vec);
+                                        ephemeral_aes_keys.insert(from, arr);
+                                    }
+                                }
+                                crate::client::crypto::InnerPayload::SecureText { ciphertext, nonce } => {
+                                    let dec_content = ephemeral_aes_keys.get(&from)
+                                        .and_then(|aes_key| crate::client::crypto::aes_decrypt(&ciphertext, aes_key, &nonce).ok())
+                                        .unwrap_or_else(|| " [AES Decryption failed or Missing key]".to_string());
 
-                                            if active_peer == from && mode == AppMode::Chat {
-                                                message_history.push((from.clone(), dec_content.clone()));
-                                                is_autoscroll = true;
-                                            } else {
-                                                *unread_counts.entry(from.clone()).or_insert(0) += 1;
-                                            }
-                                            
-                                            if let Ok(conn) = storage::get_chat_db(&from) {
-                                                let _ = conn.execute(
-                                                    "INSERT INTO messages (timestamp, sender, content, status, is_yours) VALUES (?1, ?2, ?3, ?4, ?5)",
-                                                    (timestamp, from.clone(), dec_content, "received", false),
-                                                );
-                                            }
-                                        }
+                                    if active_peer == from && mode == AppMode::Chat {
+                                        message_history.push((from.clone(), dec_content.clone()));
+                                        is_autoscroll = true;
+                                    } else {
+                                        *unread_counts.entry(from.clone()).or_insert(0) += 1;
+                                    }
+                                    
+                                    if let Ok(conn) = storage::get_chat_db(&from) {
+                                        let _ = conn.execute(
+                                            "INSERT INTO messages (timestamp, sender, content, status, is_yours) VALUES (?1, ?2, ?3, ?4, ?5)",
+                                            (timestamp, from, dec_content, "received", false),
+                                        );
                                     }
                                 }
                             }
                         },
                         ServerResponse::KeyResponse { public_key, online_status: _ } => {
                             if let Some(contact) = contacts.iter_mut().find(|c| c.full_address == active_peer) {
-                                contact.public_key = public_key.clone();
+                                contact.public_key.clone_from(&public_key);
                                 let mut data = storage::load_contacts().unwrap_or_default();
                                 if let Some(c) = data.contacts.iter_mut().find(|c| c.full_address == active_peer) {
-                                    c.public_key = public_key.clone();
+                                    c.public_key.clone_from(&public_key);
                                     let _ = storage::save_contacts(&data);
                                 }
                             }
 
                             if !public_key.is_empty() && !ephemeral_aes_keys.contains_key(&active_peer) {
+                                use base64::{engine::general_purpose, Engine as _};
                                 use rand::Rng;
-                                use base64::{Engine as _, engine::general_purpose};
                                 
                                 let mut new_key = [0u8; 32];
                                 rand::thread_rng().fill(&mut new_key);
 
                                 let new_key_b64 = general_purpose::STANDARD.encode(new_key);
-                                if let Ok(encrypted_aes_str) = crate::client::crypto::encrypt(&new_key_b64, &public_key) {
-                                    let payload = crate::client::crypto::InnerPayload::KeyInit { 
-                                        encrypted_aes_key: encrypted_aes_str.into_bytes() 
+                                let Ok(encrypted_aes_str) = crate::client::crypto::encrypt(&new_key_b64, &public_key) else { continue };
+                                let payload = crate::client::crypto::InnerPayload::KeyInit { 
+                                    encrypted_aes_key: encrypted_aes_str.into_bytes() 
+                                };
+                                let Ok(json_str) = serde_json::to_string(&payload) else { continue };
+                                
+                                if let (Some(client), Some(acc)) = (net_client.as_mut(), account.as_ref()) {
+                                    let msg = ClientMessage::SendMessage {
+                                        from: acc.full_address.clone(),
+                                        to: active_peer.clone(),
+                                        encrypted_content: json_str,
+                                        timestamp: chrono::Utc::now().to_rfc3339(),
                                     };
-                                    if let Ok(json_str) = serde_json::to_string(&payload) {
-                                        if let Some(client) = net_client.as_mut() {
-                                            if let Some(acc) = account.as_ref() {
-                                                let msg = ClientMessage::SendMessage {
-                                                    from: acc.full_address.clone(),
-                                                    to: active_peer.clone(),
-                                                    encrypted_content: json_str,
-                                                    timestamp: chrono::Utc::now().to_rfc3339(),
-                                                };
-                                                let _ = client.sender.send(msg);
-                                            }
-                                        }
-                                        ephemeral_aes_keys.insert(active_peer.clone(), new_key);
-                                    }
+                                    let _ = client.sender.send(msg);
                                 }
+                                ephemeral_aes_keys.insert(active_peer.clone(), new_key);
                             }
                         },
                         ServerResponse::StatusResponse { target, online, last_seen } => {
@@ -559,7 +550,6 @@ async fn run_app(
                     },
                     AppMode::Peers => match key.code {
                         KeyCode::Char(c) => {
-                            // Check timeout
                             if let Some(last_time) = last_key_time {
                                 if last_time.elapsed() > Duration::from_secs(5) {
                                     easter_egg_buffer.clear();
@@ -567,7 +557,6 @@ async fn run_app(
                             }
                             last_key_time = Some(Instant::now());
 
-                            // Update buffer
                             let sequence = "tobyfox";
                             let next_buffer = format!("{}{}", easter_egg_buffer, c);
                             let is_sequence_part = sequence.starts_with(&next_buffer) || sequence.starts_with(&c.to_string());
@@ -586,7 +575,6 @@ async fn run_app(
                                 easter_egg_buffer.clear();
                                 last_key_time = None;
                             } else if !is_sequence_part {
-                                // Command handling
                                 match c {
                                     'a' => {
                                         input_buffer.clear();
